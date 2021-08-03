@@ -1,5 +1,5 @@
 # Go Rabbit
-A simple helper for publishing messages on RabbitMQ
+A simple helper for working with RabbitMQ
 
 # To do
 1. Auto-reconnect
