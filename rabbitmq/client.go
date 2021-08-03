@@ -25,7 +25,8 @@ func NewRabbitConfig(host string, port int, username, password string) RabbitCon
 type RabbitClient interface {
 	Connection() (*amqp.Connection, error)
 	Close() error
-	NewPublisher(config PublishConfig) (*RabbitPublisher, error)
+	NewPublisher(config PublishConfig) (RabbitPublisher, error)
+	NewConsumer(config ConsumeConfig, f func(delivery amqp.Delivery)) (RabbitConsumer, error)
 }
 
 type rabbitClientImpl struct {
@@ -62,7 +63,7 @@ func (r rabbitClientImpl) Close() error {
 	return err
 }
 
-func (r rabbitClientImpl) NewPublisher(config PublishConfig) (*RabbitPublisher, error) {
+func (r rabbitClientImpl) NewPublisher(config PublishConfig) (RabbitPublisher, error) {
 	conn, err := r.Connection()
 	if err != nil {
 		return nil, err
@@ -73,9 +74,30 @@ func (r rabbitClientImpl) NewPublisher(config PublishConfig) (*RabbitPublisher, 
 		return nil, err
 	}
 
-	p := &RabbitPublisher{
+	p := rabbitPublisherImpl{
 		channel: ch,
 		config:  config,
 	}
 	return p, nil
+}
+
+func (r rabbitClientImpl) NewConsumer(config ConsumeConfig, f func(delivery amqp.Delivery)) (RabbitConsumer, error) {
+	conn, err := r.Connection()
+	if err != nil {
+		return nil, err
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	c := rabbitConsumerImpl{
+		channel: ch,
+		config:  config,
+	}
+
+	c.consume(f)
+
+	return c, nil
 }

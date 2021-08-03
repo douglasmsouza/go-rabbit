@@ -14,12 +14,18 @@ type PublishConfig struct {
 	Immediate  bool
 }
 
-type RabbitPublisher struct {
+type RabbitPublisher interface {
+	Publish(p amqp.Publishing) error
+	PublishJSON(v interface{}, p amqp.Publishing) error
+	Close() error
+}
+
+type rabbitPublisherImpl struct {
 	channel *amqp.Channel
 	config  PublishConfig
 }
 
-func (r RabbitPublisher) Publish(p amqp.Publishing) error {
+func (r rabbitPublisherImpl) Publish(p amqp.Publishing) error {
 	err := r.channel.Publish(
 		r.config.Exchange,
 		r.config.RoutingKey,
@@ -31,7 +37,7 @@ func (r RabbitPublisher) Publish(p amqp.Publishing) error {
 	return err
 }
 
-func (r RabbitPublisher) PublishJSON(v interface{}, p amqp.Publishing) error {
+func (r rabbitPublisherImpl) PublishJSON(v interface{}, p amqp.Publishing) error {
 	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)
@@ -49,4 +55,8 @@ func (r RabbitPublisher) PublishJSON(v interface{}, p amqp.Publishing) error {
 
 	err = r.Publish(p)
 	return err
+}
+
+func (r rabbitPublisherImpl) Close() error {
+	return r.channel.Close()
 }
