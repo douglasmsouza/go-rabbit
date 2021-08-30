@@ -8,10 +8,12 @@ import (
 )
 
 type PublishConfig struct {
-	Exchange   string
-	RoutingKey string
-	Mandatory  bool
-	Immediate  bool
+	Exchange      string
+	RoutingKey    string
+	ExchangeDlq   string
+	RoutingKeyDlq string
+	Mandatory     bool
+	Immediate     bool
 }
 
 type RabbitPublisher interface {
@@ -51,6 +53,18 @@ func (r rabbitPublisherImpl) PublishJSON(v interface{}, p amqp.Publishing) error
 	p.Body = buffer.Bytes()
 	if p.DeliveryMode == 0 {
 		p.DeliveryMode = amqp.Persistent
+	}
+
+	if p.Headers == nil {
+		p.Headers = make(amqp.Table)
+	}
+
+	if r.config.ExchangeDlq != "" {
+		p.Headers["x-dead-letter-exchange"] = r.config.ExchangeDlq
+	}
+
+	if r.config.RoutingKeyDlq != "" {
+		p.Headers["x-dead-letter-routing-key"] = r.config.RoutingKeyDlq
 	}
 
 	err = r.Publish(p)
