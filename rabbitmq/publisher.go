@@ -18,7 +18,9 @@ type PublishConfig struct {
 
 type RabbitPublisher interface {
 	Publish(p amqp.Publishing) error
+	PublishWithRoutingKey(routingKey string, p amqp.Publishing) error
 	PublishJSON(v interface{}, p amqp.Publishing) error
+	PublishJSONWithRoutingKey(v interface{}, routingKey string, p amqp.Publishing) error
 	Close() error
 }
 
@@ -28,9 +30,15 @@ type rabbitPublisherImpl struct {
 }
 
 func (r rabbitPublisherImpl) Publish(p amqp.Publishing) error {
+	err := r.PublishWithRoutingKey(r.config.RoutingKey, p)
+
+	return err
+}
+
+func (r rabbitPublisherImpl) PublishWithRoutingKey(routingKey string, p amqp.Publishing) error {
 	err := r.channel.Publish(
 		r.config.Exchange,
-		r.config.RoutingKey,
+		routingKey,
 		r.config.Mandatory,
 		r.config.Immediate,
 		p,
@@ -40,6 +48,11 @@ func (r rabbitPublisherImpl) Publish(p amqp.Publishing) error {
 }
 
 func (r rabbitPublisherImpl) PublishJSON(v interface{}, p amqp.Publishing) error {
+	err := r.PublishJSONWithRoutingKey(v, r.config.RoutingKey, p)
+	return err
+}
+
+func (r rabbitPublisherImpl) PublishJSONWithRoutingKey(v interface{}, routingKey string, p amqp.Publishing) error {
 	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)
@@ -67,7 +80,7 @@ func (r rabbitPublisherImpl) PublishJSON(v interface{}, p amqp.Publishing) error
 		p.Headers["x-dead-letter-routing-key"] = r.config.RoutingKeyDlq
 	}
 
-	err = r.Publish(p)
+	err = r.PublishWithRoutingKey(routingKey, p)
 	return err
 }
 
