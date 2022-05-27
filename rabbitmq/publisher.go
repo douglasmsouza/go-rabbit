@@ -25,17 +25,18 @@ type RabbitPublisher interface {
 }
 
 type rabbitPublisherImpl struct {
+	name    string
 	channel *amqp.Channel
 	config  PublishConfig
 }
 
-func (r rabbitPublisherImpl) Publish(p amqp.Publishing) error {
+func (r *rabbitPublisherImpl) Publish(p amqp.Publishing) error {
 	err := r.PublishWithRoutingKey(r.config.RoutingKey, p)
 
 	return err
 }
 
-func (r rabbitPublisherImpl) PublishWithRoutingKey(routingKey string, p amqp.Publishing) error {
+func (r *rabbitPublisherImpl) PublishWithRoutingKey(routingKey string, p amqp.Publishing) error {
 	err := r.channel.Publish(
 		r.config.Exchange,
 		routingKey,
@@ -47,12 +48,12 @@ func (r rabbitPublisherImpl) PublishWithRoutingKey(routingKey string, p amqp.Pub
 	return err
 }
 
-func (r rabbitPublisherImpl) PublishJSON(v interface{}, p amqp.Publishing) error {
+func (r *rabbitPublisherImpl) PublishJSON(v interface{}, p amqp.Publishing) error {
 	err := r.PublishJSONWithRoutingKey(v, r.config.RoutingKey, p)
 	return err
 }
 
-func (r rabbitPublisherImpl) PublishJSONWithRoutingKey(v interface{}, routingKey string, p amqp.Publishing) error {
+func (r *rabbitPublisherImpl) PublishJSONWithRoutingKey(v interface{}, routingKey string, p amqp.Publishing) error {
 	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)
@@ -84,6 +85,18 @@ func (r rabbitPublisherImpl) PublishJSONWithRoutingKey(v interface{}, routingKey
 	return err
 }
 
-func (r rabbitPublisherImpl) Close() error {
+func (r *rabbitPublisherImpl) Close() error {
 	return r.channel.Close()
+}
+
+func (r *rabbitPublisherImpl) updateChannel(channel *amqp.Channel) {
+	r.channel = channel
+}
+
+func (r *rabbitPublisherImpl) getChannel() *amqp.Channel {
+	return r.channel
+}
+
+func (r *rabbitPublisherImpl) getName() string {
+	return r.name
 }

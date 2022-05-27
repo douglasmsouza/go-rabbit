@@ -38,8 +38,10 @@ type Binding struct {
 	Args       amqp.Table
 }
 
-type Listener struct {
-	Tag       string
+type ConsumeConfig struct {
+	Queue     Queue
+	Exchange  *Exchange
+	Binding   Binding
 	AutoAck   bool
 	Exclusive bool
 	NoLocal   bool
@@ -47,24 +49,18 @@ type Listener struct {
 	Args      amqp.Table
 }
 
-type ConsumeConfig struct {
-	Queue    Queue
-	Exchange *Exchange
-	Binding  *Binding
-	Listener Listener
-}
-
 type RabbitConsumer interface {
-	consume(f func(delivery amqp.Delivery)) error
 	Close() error
 }
 
 type rabbitConsumerImpl struct {
+	name    string
 	channel *amqp.Channel
 	config  ConsumeConfig
+	handler func(delivery amqp.Delivery)
 }
 
-func (r rabbitConsumerImpl) consume(f func(delivery amqp.Delivery)) error {
+func (r *rabbitConsumerImpl) bindQueue() (*amqp.Queue, error) {
 	queue, err := r.channel.QueueDeclare(
 		r.config.Queue.Name,
 		r.config.Queue.Durable,
@@ -74,7 +70,7 @@ func (r rabbitConsumerImpl) consume(f func(delivery amqp.Delivery)) error {
 		r.config.Queue.Args,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if r.config.Exchange != nil {
@@ -88,31 +84,38 @@ func (r rabbitConsumerImpl) consume(f func(delivery amqp.Delivery)) error {
 			r.config.Exchange.Args,
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		if r.config.Binding != nil {
-			err = r.channel.QueueBind(
-				queue.Name,
-				r.config.Binding.RoutingKey,
-				r.config.Exchange.Name,
-				r.config.Binding.NoWait,
-				r.config.Binding.Args,
-			)
-			if err != nil {
-				return err
-			}
+		err = r.channel.QueueBind(
+			queue.Name,
+			r.config.Binding.RoutingKey,
+			r.config.Exchange.Name,
+			r.config.Binding.NoWait,
+			r.config.Binding.Args,
+		)
+		if err != nil {
+			return nil, err
 		}
+	}
+
+	return &queue, nil
+}
+
+func (r *rabbitConsumerImpl) start() error {
+	queue, err := r.bindQueue()
+	if err != nil {
+		return err
 	}
 
 	deliveries, err := r.channel.Consume(
 		queue.Name,
-		r.config.Listener.Tag,
-		r.config.Listener.AutoAck,
-		r.config.Listener.Exclusive,
-		r.config.Listener.NoLocal,
-		r.config.Listener.NoWait,
-		r.config.Listener.Args,
+		r.name,
+		r.config.AutoAck,
+		r.config.Exclusive,
+		r.config.NoLocal,
+		r.config.NoWait,
+		r.config.Args,
 	)
 	if err != nil {
 		return err
@@ -120,13 +123,26 @@ func (r rabbitConsumerImpl) consume(f func(delivery amqp.Delivery)) error {
 
 	go func() {
 		for delivery := range deliveries {
-			f(delivery)
+			r.handler(delivery)
 		}
 	}()
 
 	return nil
 }
 
-func (r rabbitConsumerImpl) Close() error {
+func (r *rabbitConsumerImpl) Close() error {
 	return r.channel.Close()
+}
+
+func (r *rabbitConsumerImpl) updateChannel(channel *amqp.Channel) {
+	r.channel = channel
+	r.start()
+}
+
+func (r *rabbitConsumerImpl) getChannel() *amqp.Channel {
+	return r.channel
+}
+
+func (r *rabbitConsumerImpl) getName() string {
+	return r.name
 }

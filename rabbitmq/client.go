@@ -2,47 +2,65 @@ package rabbitmq
 
 import (
 	"fmt"
+	"os"
+	"sync"
+	"time"
 
+	"github.com/koding/logging"
 	"github.com/streadway/amqp"
 )
 
 type RabbitConfig struct {
-	Host     string
-	Port     int
-	Username string
-	Password string
+	host     string
+	port     int
+	username string
+	password string
+	logLevel logging.Level
 }
 
-func NewRabbitConfig(host string, port int, username, password string) RabbitConfig {
+func NewRabbitConfig(host string, port int, username, password string, logLevel logging.Level) RabbitConfig {
 	return RabbitConfig{
-		Host:     host,
-		Port:     port,
-		Username: username,
-		Password: password,
+		host:     host,
+		port:     port,
+		username: username,
+		password: password,
+		logLevel: logLevel,
 	}
 }
 
 type RabbitClient interface {
-	Connection() (*amqp.Connection, error)
-	Close() error
-	NewPublisher(config PublishConfig) (RabbitPublisher, error)
-	NewConsumer(config ConsumeConfig, f func(delivery amqp.Delivery)) (RabbitConsumer, error)
+	Close()
+	NewPublisher(name string, config PublishConfig) (RabbitPublisher, error)
+	NewConsumer(name string, config ConsumeConfig, f func(delivery amqp.Delivery)) (RabbitConsumer, error)
 }
 
 type rabbitClientImpl struct {
-	conn   *amqp.Connection
-	config RabbitConfig
+	config    RabbitConfig
+	conn      *amqp.Connection
+	connMutex sync.Mutex
+	logger    logging.Logger
 }
 
 func NewRabbitClient(config RabbitConfig) RabbitClient {
-	return rabbitClientImpl{
+	logHandler := logging.NewWriterHandler(os.Stderr)
+	logHandler.SetLevel(config.logLevel)
+
+	logger := logging.NewLogger("rabbitmq")
+	logger.SetLevel(config.logLevel)
+	logger.SetHandler(logHandler)
+
+	return &rabbitClientImpl{
 		config: config,
+		logger: logger,
 	}
 }
 
-func (r rabbitClientImpl) Connection() (*amqp.Connection, error) {
+func (r *rabbitClientImpl) newChannel() (*amqp.Channel, error) {
+	r.connMutex.Lock()
+	defer r.connMutex.Unlock()
+
 	if r.conn == nil || r.conn.IsClosed() {
-		url := fmt.Sprintf("amqp://%s:%s@%s:%d/", r.config.Username, r.config.Password, r.config.Host, r.config.Port)
+		url := fmt.Sprintf("amqp://%s:%s@%s:%d/", r.config.username, r.config.password, r.config.host, r.config.port)
 		c, err := amqp.Dial(url)
 		if err != nil {
 			return nil, err
@@ -51,53 +69,74 @@ func (r rabbitClientImpl) Connection() (*amqp.Connection, error) {
 		r.conn = c
 	}
 
-	return r.conn, nil
+	channel, err := r.conn.Channel()
+	return channel, err
 }
 
-func (r rabbitClientImpl) Close() error {
-	if r.conn == nil {
-		return nil
+func (r *rabbitClientImpl) Close() {
+	if r.conn != nil {
+		_ = r.conn.Close()
 	}
-
-	err := r.conn.Close()
-	return err
 }
 
-func (r rabbitClientImpl) NewPublisher(config PublishConfig) (RabbitPublisher, error) {
-	conn, err := r.Connection()
+func (r *rabbitClientImpl) NewPublisher(name string, config PublishConfig) (RabbitPublisher, error) {
+	channel, err := r.newChannel()
 	if err != nil {
 		return nil, err
 	}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, err
-	}
-
-	p := rabbitPublisherImpl{
-		channel: ch,
+	p := &rabbitPublisherImpl{
+		name:    name,
+		channel: channel,
 		config:  config,
 	}
+
+	r.handleReconnection(p)
+
+	r.logger.Debug("new publisher started: %s", p.name)
+
 	return p, nil
 }
 
-func (r rabbitClientImpl) NewConsumer(config ConsumeConfig, f func(delivery amqp.Delivery)) (RabbitConsumer, error) {
-	conn, err := r.Connection()
+func (r *rabbitClientImpl) NewConsumer(name string, config ConsumeConfig, handler func(delivery amqp.Delivery)) (RabbitConsumer, error) {
+	channel, err := r.newChannel()
 	if err != nil {
 		return nil, err
 	}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, err
-	}
-
-	c := rabbitConsumerImpl{
-		channel: ch,
+	c := &rabbitConsumerImpl{
+		name:    name,
+		channel: channel,
 		config:  config,
+		handler: handler,
 	}
 
-	c.consume(f)
+	r.handleReconnection(c)
+	c.start()
+
+	r.logger.Debug("new consumer started: %s", c.name)
 
 	return c, nil
+}
+
+func (r *rabbitClientImpl) handleReconnection(hasChannel hasChannel) {
+	go func() {
+		<-hasChannel.getChannel().NotifyClose(make(chan *amqp.Error))
+
+		r.logger.Debug("trying to reconnect channel %s", hasChannel.getName())
+
+		for {
+			newChannel, err := r.newChannel()
+			if err != nil {
+				r.logger.Debug("connection not available, will retry...")
+				time.Sleep(10 * time.Second)
+			} else {
+				r.logger.Debug("new channel created")
+				_ = hasChannel.Close()
+				hasChannel.updateChannel(newChannel)
+				r.logger.Debug("new channel updated")
+				break
+			}
+		}
+	}()
 }

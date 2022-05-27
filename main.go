@@ -5,40 +5,55 @@ import (
 	"log"
 
 	"github.com/douglasmsouza/go-rabbit/rabbitmq"
+	"github.com/koding/logging"
 	"github.com/streadway/amqp"
 )
 
 func main() {
-	rabbitConfig := rabbitmq.NewRabbitConfig("localhost", 5672, "guest", "guest")
-	rabbitClient := rabbitmq.NewRabbitClient(rabbitConfig)
+	rabbitConfig := rabbitmq.NewRabbitConfig("localhost", 5672, "guest", "guest", logging.DEBUG)
+	client := rabbitmq.NewRabbitClient(rabbitConfig)
 
-	consumeConfig := rabbitmq.ConsumeConfig{
+	consumeConfig1 := rabbitmq.ConsumeConfig{
 		Queue: rabbitmq.Queue{
-			Name:    "test",
+			Name:    "test1",
 			Durable: true,
 		},
 		Exchange: &rabbitmq.Exchange{
 			Name:    "test",
 			Durable: true,
-			Type:    rabbitmq.Topic,
+			Type:    rabbitmq.Fanout,
 		},
-		Binding: &rabbitmq.Binding{
-			RoutingKey: "test.message.create",
+	}
+
+	consumeConfig2 := rabbitmq.ConsumeConfig{
+		Queue: rabbitmq.Queue{
+			Name:    "test2",
+			Durable: true,
+		},
+		Exchange: &rabbitmq.Exchange{
+			Name:    "test",
+			Durable: true,
+			Type:    rabbitmq.Fanout,
 		},
 	}
 
 	forever := make(chan bool)
 
-	consumer, err := rabbitClient.NewConsumer(consumeConfig, func(delivery amqp.Delivery) {
+	_, _ = client.NewConsumer("consumer-1", consumeConfig1, func(delivery amqp.Delivery) {
 		fmt.Printf("%s", string(delivery.Body))
 		fmt.Println()
 
 		delivery.Ack(true)
 	})
-	if err != nil {
-		panic(err.Error())
-	}
-	defer consumer.Close()
+
+	_, _ = client.NewConsumer("consumer-2", consumeConfig2, func(delivery amqp.Delivery) {
+		fmt.Printf("%s", string(delivery.Body))
+		fmt.Println()
+
+		delivery.Ack(true)
+	})
+
+	defer client.Close()
 
 	log.Printf("Wait for new messages, to exit press CTRL+C")
 	<-forever
