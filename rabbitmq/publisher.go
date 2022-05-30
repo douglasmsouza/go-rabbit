@@ -25,9 +25,18 @@ type RabbitPublisher interface {
 }
 
 type rabbitPublisherImpl struct {
-	name    string
-	channel *amqp.Channel
-	config  PublishConfig
+	rabbitChannel
+	config PublishConfig
+}
+
+func newRabbitPublisher(channel rabbitChannel, config PublishConfig) RabbitPublisher {
+	c := &rabbitPublisherImpl{
+		rabbitChannel: channel,
+		config:        config,
+	}
+
+	handleReconnection(c)
+	return c
 }
 
 func (r *rabbitPublisherImpl) Publish(p amqp.Publishing) error {
@@ -85,18 +94,6 @@ func (r *rabbitPublisherImpl) PublishJSONWithRoutingKey(v interface{}, routingKe
 	return err
 }
 
-func (r *rabbitPublisherImpl) Close() error {
-	return r.channel.Close()
-}
-
 func (r *rabbitPublisherImpl) updateChannel(channel *amqp.Channel) {
 	r.channel = channel
-}
-
-func (r *rabbitPublisherImpl) getChannel() *amqp.Channel {
-	return r.channel
-}
-
-func (r *rabbitPublisherImpl) getName() string {
-	return r.name
 }

@@ -2,13 +2,13 @@ package rabbitmq
 
 import (
 	"fmt"
-	"os"
 	"sync"
-	"time"
 
 	"github.com/koding/logging"
 	"github.com/streadway/amqp"
 )
+
+const LOG_NAME = "rabbit-client"
 
 type RabbitConfig struct {
 	host     string
@@ -31,7 +31,7 @@ func NewRabbitConfig(host string, port int, username, password string, logLevel 
 type RabbitClient interface {
 	Close()
 	NewPublisher(name string, config PublishConfig) (RabbitPublisher, error)
-	NewConsumer(name string, config ConsumeConfig, f func(delivery amqp.Delivery)) (RabbitConsumer, error)
+	NewConsumer(name string, config ConsumeConfig, f DeliveryHandler) (RabbitConsumer, error)
 }
 
 type rabbitClientImpl struct {
@@ -39,19 +39,14 @@ type rabbitClientImpl struct {
 	conn      *amqp.Connection
 	connMutex sync.Mutex
 	logger    logging.Logger
+	channels  []rabbitChannel
 }
 
 func NewRabbitClient(config RabbitConfig) RabbitClient {
-	logHandler := logging.NewWriterHandler(os.Stderr)
-	logHandler.SetLevel(config.logLevel)
-
-	logger := logging.NewLogger("rabbitmq")
-	logger.SetLevel(config.logLevel)
-	logger.SetHandler(logHandler)
-
 	return &rabbitClientImpl{
-		config: config,
-		logger: logger,
+		config:   config,
+		logger:   newLogger(LOG_NAME, config.logLevel),
+		channels: []rabbitChannel{},
 	}
 }
 
@@ -77,66 +72,40 @@ func (r *rabbitClientImpl) Close() {
 	if r.conn != nil {
 		_ = r.conn.Close()
 	}
+
+	for _, c := range r.channels {
+		c.Close()
+	}
+}
+
+func (r *rabbitClientImpl) newRabbitChannel(name string) (*rabbitChannel, error) {
+	logger := newLogger(fmt.Sprintf("%s:%s", LOG_NAME, name), r.config.logLevel)
+	channel, err := newRabbitChannel(logger, r.newChannel)
+	return channel, err
 }
 
 func (r *rabbitClientImpl) NewPublisher(name string, config PublishConfig) (RabbitPublisher, error) {
-	channel, err := r.newChannel()
+	channel, err := r.newRabbitChannel(name)
 	if err != nil {
 		return nil, err
 	}
 
-	p := &rabbitPublisherImpl{
-		name:    name,
-		channel: channel,
-		config:  config,
-	}
-
-	r.handleReconnection(p)
-
-	r.logger.Debug("new publisher started: %s", p.name)
-
+	p := newRabbitPublisher(*channel, config)
+	r.logger.Debug("new publisher started: %s", name)
 	return p, nil
 }
 
-func (r *rabbitClientImpl) NewConsumer(name string, config ConsumeConfig, handler func(delivery amqp.Delivery)) (RabbitConsumer, error) {
-	channel, err := r.newChannel()
+func (r *rabbitClientImpl) NewConsumer(name string, config ConsumeConfig, handler DeliveryHandler) (RabbitConsumer, error) {
+	channel, err := r.newRabbitChannel(name)
 	if err != nil {
 		return nil, err
 	}
 
-	c := &rabbitConsumerImpl{
-		name:    name,
-		channel: channel,
-		config:  config,
-		handler: handler,
-	}
-
-	r.handleReconnection(c)
-	c.start()
-
-	r.logger.Debug("new consumer started: %s", c.name)
-
+	c := newRabbitConsumer(*channel, config, handler)
+	r.logger.Debug("new consumer started: %s", name)
 	return c, nil
 }
 
-func (r *rabbitClientImpl) handleReconnection(hasChannel hasChannel) {
-	go func() {
-		<-hasChannel.getChannel().NotifyClose(make(chan *amqp.Error))
-
-		r.logger.Debug("trying to reconnect channel %s", hasChannel.getName())
-
-		for {
-			newChannel, err := r.newChannel()
-			if err != nil {
-				r.logger.Debug("connection not available, will retry...")
-				time.Sleep(10 * time.Second)
-			} else {
-				r.logger.Debug("new channel created")
-				_ = hasChannel.Close()
-				hasChannel.updateChannel(newChannel)
-				r.logger.Debug("new channel updated")
-				break
-			}
-		}
-	}()
+func (r *rabbitClientImpl) appendChannels(c rabbitChannel) {
+	r.channels = append(r.channels, c)
 }

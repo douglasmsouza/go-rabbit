@@ -1,6 +1,8 @@
 package rabbitmq
 
 import (
+	"fmt"
+
 	"github.com/streadway/amqp"
 )
 
@@ -53,11 +55,24 @@ type RabbitConsumer interface {
 	Close() error
 }
 
+type DeliveryHandler = func(delivery amqp.Delivery) error
+
 type rabbitConsumerImpl struct {
-	name    string
-	channel *amqp.Channel
+	rabbitChannel
 	config  ConsumeConfig
-	handler func(delivery amqp.Delivery)
+	handler DeliveryHandler
+}
+
+func newRabbitConsumer(channel rabbitChannel, config ConsumeConfig, handler DeliveryHandler) RabbitConsumer {
+	c := &rabbitConsumerImpl{
+		rabbitChannel: channel,
+		config:        config,
+		handler:       handler,
+	}
+
+	handleReconnection(c)
+	c.start()
+	return c
 }
 
 func (r *rabbitConsumerImpl) bindQueue() (*amqp.Queue, error) {
@@ -110,7 +125,7 @@ func (r *rabbitConsumerImpl) start() error {
 
 	deliveries, err := r.channel.Consume(
 		queue.Name,
-		r.name,
+		r.config.Queue.Name,
 		r.config.AutoAck,
 		r.config.Exclusive,
 		r.config.NoLocal,
@@ -123,15 +138,16 @@ func (r *rabbitConsumerImpl) start() error {
 
 	go func() {
 		for delivery := range deliveries {
-			r.handler(delivery)
+			r.debug("message received", delivery)
+			if err := r.handler(delivery); err != nil {
+				r.debug(fmt.Sprintf("error processing message: %s", err.Error()), delivery)
+			} else {
+				r.debug("message processed", delivery)
+			}
 		}
 	}()
 
 	return nil
-}
-
-func (r *rabbitConsumerImpl) Close() error {
-	return r.channel.Close()
 }
 
 func (r *rabbitConsumerImpl) updateChannel(channel *amqp.Channel) {
@@ -139,10 +155,6 @@ func (r *rabbitConsumerImpl) updateChannel(channel *amqp.Channel) {
 	r.start()
 }
 
-func (r *rabbitConsumerImpl) getChannel() *amqp.Channel {
-	return r.channel
-}
-
-func (r *rabbitConsumerImpl) getName() string {
-	return r.name
+func (r *rabbitConsumerImpl) debug(message string, delivery amqp.Delivery) {
+	r.logger().Debug("id=%d, %s", delivery.DeliveryTag, message)
 }
