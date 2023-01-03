@@ -40,13 +40,19 @@ type rabbitClientImpl struct {
 	connMutex sync.Mutex
 	logger    logging.Logger
 	channels  []rabbitChannel
+	name      string
 }
 
 func NewRabbitClient(config RabbitConfig) RabbitClient {
+	return NewRabbitClientWithName(config, "")
+}
+
+func NewRabbitClientWithName(config RabbitConfig, name string) RabbitClient {
 	return &rabbitClientImpl{
 		config:   config,
 		logger:   newLogger(LOG_NAME, config.logLevel),
 		channels: []rabbitChannel{},
+		name:     name,
 	}
 }
 
@@ -56,7 +62,11 @@ func (r *rabbitClientImpl) newChannel() (*amqp.Channel, error) {
 
 	if r.conn == nil || r.conn.IsClosed() {
 		url := fmt.Sprintf("amqp://%s:%s@%s:%d/", r.config.username, r.config.password, r.config.host, r.config.port)
-		c, err := amqp.Dial(url)
+		c, err := amqp.DialConfig(url, amqp.Config{
+			Properties: amqp.Table{
+				"connection_name": r.name,
+			},
+		})
 		if err != nil {
 			return nil, err
 		}
