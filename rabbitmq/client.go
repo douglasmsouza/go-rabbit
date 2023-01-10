@@ -79,19 +79,25 @@ func (r *rabbitClientImpl) newChannel() (*amqp.Channel, error) {
 }
 
 func (r *rabbitClientImpl) Close() {
+	for _, c := range r.channels {
+		c.Close()
+	}
+
 	if r.conn != nil {
 		_ = r.conn.Close()
 	}
 
-	for _, c := range r.channels {
-		c.Close()
-	}
+	r.channels = []rabbitChannel{}
 }
 
 func (r *rabbitClientImpl) newRabbitChannel(name string) (*rabbitChannel, error) {
 	logger := newLogger(fmt.Sprintf("%s:%s", LOG_NAME, name), r.config.logLevel)
 	channel, err := newRabbitChannel(logger, r.newChannel)
-	return channel, err
+	if err != nil {
+		return nil, err
+	}
+	r.appendChannels(*channel)
+	return channel, nil
 }
 
 func (r *rabbitClientImpl) NewPublisher(name string, config PublishConfig) (RabbitPublisher, error) {

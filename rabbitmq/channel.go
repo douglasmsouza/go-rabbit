@@ -55,10 +55,14 @@ func (r *rabbitChannel) newChannel() (*amqp.Channel, error) {
 
 func handleReconnection(h hasChannel) {
 	go func() {
-		<-h.getChannel().NotifyClose(make(chan *amqp.Error))
+		err := <-h.getChannel().NotifyClose(make(chan *amqp.Error))
+
+		if err == nil {
+			return
+		}
 
 		for {
-			h.logger().Debug("trying to reconnect channel")
+			h.logger().Debug("trying to reconnect channel with err: %d - %s", err.Code, err.Reason)
 
 			newChannel, err := h.newChannel()
 			if err != nil {
