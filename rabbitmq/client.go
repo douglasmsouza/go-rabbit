@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"crypto/tls"
 	"fmt"
 	"sync"
 
@@ -16,6 +17,23 @@ type RabbitConfig struct {
 	username string
 	password string
 	logLevel logging.Level
+	ssl      bool
+}
+
+func (r RabbitConfig) protocol() string {
+	if r.ssl {
+		return "amqps"
+	}
+	return "amqp"
+}
+
+func (r RabbitConfig) tlsClientConfig() *tls.Config {
+	if r.ssl {
+		return &tls.Config{
+			InsecureSkipVerify: true,
+		}
+	}
+	return nil
 }
 
 func NewRabbitConfig(host string, port int, username, password string, logLevel logging.Level) RabbitConfig {
@@ -25,6 +43,18 @@ func NewRabbitConfig(host string, port int, username, password string, logLevel 
 		username: username,
 		password: password,
 		logLevel: logLevel,
+		ssl:      false,
+	}
+}
+
+func NewRabbitConfigWithSSL(host string, port int, username, password string, logLevel logging.Level) RabbitConfig {
+	return RabbitConfig{
+		host:     host,
+		port:     port,
+		username: username,
+		password: password,
+		logLevel: logLevel,
+		ssl:      true,
 	}
 }
 
@@ -61,11 +91,12 @@ func (r *rabbitClientImpl) newChannel() (*amqp.Channel, error) {
 	defer r.connMutex.Unlock()
 
 	if r.conn == nil || r.conn.IsClosed() {
-		url := fmt.Sprintf("amqp://%s:%s@%s:%d/", r.config.username, r.config.password, r.config.host, r.config.port)
+		url := fmt.Sprintf("%s://%s:%s@%s:%d/", r.config.protocol(), r.config.username, r.config.password, r.config.host, r.config.port)
 		c, err := amqp.DialConfig(url, amqp.Config{
 			Properties: amqp.Table{
 				"connection_name": r.name,
 			},
+			TLSClientConfig: r.config.tlsClientConfig(),
 		})
 		if err != nil {
 			return nil, err
